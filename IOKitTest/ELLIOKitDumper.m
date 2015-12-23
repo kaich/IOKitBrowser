@@ -10,8 +10,10 @@
 #import "ELLIOKitDumper.h"
 #import <mach/mach_host.h>
 #import "ELLIOKitNodeInfo.h"
+#include <dlfcn.h>
 
 #define kIOServicePlane    "IOService"
+
 
 typedef mach_port_t io_object_t;
 typedef io_object_t io_registry_entry_t;
@@ -63,30 +65,54 @@ static void assertion(int condition, char *message) {
 }
 
 
+
+static void * IOKIT = NULL;
+
+void* getIOKit()
+{
+    if(IOKIT == NULL)
+    {
+        IOKIT = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+    }
+    
+    return IOKIT;
+}
+
+
+
 @implementation ELLIOKitDumper
 
 - (ELLIOKitNodeInfo *)dumpIOKitTree {
-    mach_port_t iokitPort = 0;
-    struct options options;
-    io_registry_entry_t service = 0;
-    kern_return_t status = KERN_SUCCESS;
+    
+    if(getIOKit())
+    {
+        mach_port_t iokitPort = 0;
+        struct options options;
+        io_registry_entry_t service = 0;
+        kern_return_t status = KERN_SUCCESS;
 
-    options.class = 0;
-    options.flags = kIORegFlagShowProperties;
-    options.name = 0;
-    options.plane = kIOServicePlane;
+        options.class = 0;
+        options.flags = kIORegFlagShowProperties;
+        options.name = 0;
+        options.plane = kIOServicePlane;
+        
+        kern_return_t (*kIOMasterPort)( mach_port_t bootstrapPort,mach_port_t * masterPort ) = dlsym(IOKIT,"IOMasterPort");
+        io_registry_entry_t (*kIORegistryGetRootEntry)(mach_port_t  masterPort ) = dlsym(IOKIT,"IORegistryGetRootEntry");
+        kern_return_t (*kIOObjectRelease)(io_object_t object) = dlsym(IOKIT, "IOObjectRelease");
 
-    status = IOMasterPort(bootstrap_port, &iokitPort);
-    assertion(status == KERN_SUCCESS, "can't obtain I/O Kit's master port");
+        status = kIOMasterPort(bootstrap_port, &iokitPort);
+        assertion(status == KERN_SUCCESS, "can't obtain I/O Kit's master port");
 
-    service = IORegistryGetRootEntry(iokitPort);
-    assertion(service, "can't obtain I/O Kit's root service");
+        service = kIORegistryGetRootEntry(iokitPort);
+        assertion(service, "can't obtain I/O Kit's root service");
 
-    ELLIOKitNodeInfo *root = [self _scan:nil service:service options:options];
+        ELLIOKitNodeInfo *root = [self _scan:nil service:service options:options];
 
-    IOObjectRelease(service);
+        kIOObjectRelease(service);
 
-    return root;
+        return root;
+    }
+    return  nil;
 }
 
 
@@ -98,27 +124,32 @@ static void assertion(int condition, char *message) {
     kern_return_t status = KERN_SUCCESS;
 
     // Obtain the service's children.
+    kern_return_t (*kIORegistryEntryGetChildIterator)(io_registry_entry_t entry, const io_name_t plane, io_iterator_t *iterator) = dlsym(IOKIT, "IORegistryEntryGetChildIterator");
 
-    status = IORegistryEntryGetChildIterator(service, options.plane, &children);
+    status = kIORegistryEntryGetChildIterator(service, options.plane, &children);
     assertion(status == KERN_SUCCESS, "can't obtain children");
+    
+    io_object_t (*kIOIteratorNext)(io_iterator_t iterator) = dlsym(IOKIT, "IOIteratorNext");
+    kern_return_t (*kIOObjectRelease)(io_object_t object) = dlsym(IOKIT, "IOObjectRelease");
 
-    childUpNext = IOIteratorNext(children);
+    childUpNext = kIOIteratorNext(children);
 
     ELLIOKitNodeInfo *node = [self _showService:service parent:parent options:options];
+    
 
     // Traverse over the children of this service.
     while (childUpNext) {
         child = childUpNext;
-        childUpNext = IOIteratorNext(children);
+        childUpNext = kIOIteratorNext(children);
 
         ELLIOKitNodeInfo *childNode = [self _scan:node service:child options:options];
 
         [node addChild:childNode];
 
-        IOObjectRelease(child);
+        kIOObjectRelease(child);
     }
 
-    IOObjectRelease(children);
+    kIOObjectRelease(children);
     children = 0;
 
     return node;
@@ -129,14 +160,18 @@ static void assertion(int condition, char *message) {
     io_name_t name;
     CFMutableDictionaryRef properties = 0;
     kern_return_t status = KERN_SUCCESS;
+    
+    kern_return_t (*kIORegistryEntryGetNameInPlane)(io_registry_entry_t entry, const io_name_t plane, io_name_t name) = dlsym(IOKIT, "IORegistryEntryGetNameInPlane");
 
-    status = IORegistryEntryGetNameInPlane(service, options.plane, name);
+    status = kIORegistryEntryGetNameInPlane(service, options.plane, name);
     if(status != KERN_SUCCESS) return nil;
     assertion(status == KERN_SUCCESS, "can't obtain name");
 
     NSMutableArray *translatedProperties = [NSMutableArray new];
+    
+    boolean_t (*kIOObjectConformsTo)(io_object_t object, const io_name_t className) = dlsym(IOKIT, "IOObjectConformsTo");
 
-    if (options.class && IOObjectConformsTo(service, options.class)) {
+    if (options.class && kIOObjectConformsTo(service, options.class)) {
         options.flags |= kIORegFlagShowProperties;
     }
 
@@ -147,8 +182,10 @@ static void assertion(int condition, char *message) {
     if (options.flags & kIORegFlagShowProperties) {
 
         // Obtain the service's properties.
+        
+        kern_return_t (*kIORegistryEntryCreateCFProperties)(io_registry_entry_t entry, CFMutableDictionaryRef *properties, CFAllocatorRef allocator, IOOptionBits options) = dlsym(IOKIT, "IORegistryEntryCreateCFProperties");
 
-        status = IORegistryEntryCreateCFProperties(service,
+        status = kIORegistryEntryCreateCFProperties(service,
                 &properties,
                 kCFAllocatorDefault,
                 kNilOptions);
