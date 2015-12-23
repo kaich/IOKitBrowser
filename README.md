@@ -9,6 +9,9 @@ http://www.lyonanderson.org/blog/2014/02/12/ios-iokit-browser/
 
 iOS 8 adapted by me.      
 
+#what's new ? 
+delete link with iokit
+
 ## Check memory type:                                                                                  
 
 Root > N61AP > AppleARMPE > arm-io > AppleT7000IO > ans > AppleA7IOPV1 > AppleCSI > asp > ASPStorage
